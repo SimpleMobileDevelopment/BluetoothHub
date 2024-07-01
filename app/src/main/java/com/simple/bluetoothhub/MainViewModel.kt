@@ -1,14 +1,18 @@
 package com.simple.bluetoothhub
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.pm.PackageManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.toMutableStateList
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.AndroidViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +30,7 @@ class MainViewModel @Inject constructor(application: Application) :
     private var bluetoothAdapter: BluetoothAdapter? = null
 
     private var discoveredDevices = mutableStateListOf<BluetoothDevice>()
+    private var pairedDevices = mutableListOf<BluetoothDevice>()
 
     // TODO: look into making this more scalable
     private var selectedDevice by mutableStateOf<BluetoothDevice?>(null)
@@ -35,9 +40,10 @@ class MainViewModel @Inject constructor(application: Application) :
     private val _viewState: MutableStateFlow<MainUiState> =
         MutableStateFlow(
             MainUiState.Loaded(
-                bluetoothState,
-                discoveredDevices,
-                selectedDeviceData
+                bluetoothState = bluetoothState,
+                discoveredDevices = discoveredDevices,
+                pairedDevices = pairedDevices,
+                selectedDeviceData = selectedDeviceData
             )
         )
     val viewState = _viewState.asStateFlow()
@@ -47,13 +53,13 @@ class MainViewModel @Inject constructor(application: Application) :
         bluetoothAdapter = bluetoothManager?.adapter
         if (bluetoothAdapter == null) {
             // Device doesn't support Bluetooth
-            bluetoothState = BluetoothState.DISABLED
+            bluetoothState = BluetoothState.UNAVAILABLE
             updateViewState()
         } else {
             val isBluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
             if (!isBluetoothEnabled) {
                 // Request to enable Bluetooth
-                bluetoothState = BluetoothState.REQUEST_PERMISSION
+                bluetoothState = BluetoothState.DISABLED
                 updateViewState()
             } else {
                 bluetoothState = BluetoothState.DEFAULT
@@ -65,16 +71,22 @@ class MainViewModel @Inject constructor(application: Application) :
         _viewState.value = MainUiState.Loaded(
             bluetoothState = bluetoothState,
             discoveredDevices = discoveredDevices,
+            pairedDevices = pairedDevices,
             selectedDeviceData = selectedDeviceData
         )
     }
 
-    private fun scanningFinished() {
-        bluetoothState = BluetoothState.DEFAULT
-    }
-
-    @SuppressLint("MissingPermission")
     fun startDeviceDiscovery() {
+        if (ActivityCompat.checkSelfPermission(
+                getApplication(),
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            bluetoothState = BluetoothState.REQUEST_PERMISSION
+            updateViewState()
+            return
+        }
+        pairedDevices = bluetoothAdapter?.bondedDevices?.toMutableStateList() ?: mutableListOf()
         if (bluetoothAdapter?.isDiscovering == true) {
             bluetoothAdapter?.cancelDiscovery()
         }
@@ -88,7 +100,7 @@ class MainViewModel @Inject constructor(application: Application) :
      * and then listen to data from connected socket
      */
     @SuppressLint("MissingPermission")
-    fun startBluetoothService() {
+    fun startBluetoothDeviceConnection() {
         bluetoothState = BluetoothState.CONNECTING
         // Cancel discovery because it otherwise slows down the connection.
         bluetoothAdapter?.cancelDiscovery()
@@ -115,13 +127,51 @@ class MainViewModel @Inject constructor(application: Application) :
 
     fun onPermissionDenied() {
         bluetoothState = BluetoothState.PERMISSION_DENIED
+        updateViewState()
     }
 
     fun onPermissionRequired() {
         bluetoothState = BluetoothState.REQUEST_PERMISSION
+        updateViewState()
+    }
+
+    fun onBluetoothDisabled() {
+        bluetoothState = BluetoothState.DISABLED
+        updateViewState()
+    }
+
+    fun onBluetoothEnabled() {
+        bluetoothState = BluetoothState.DEFAULT
+        updateViewState()
     }
 
     fun cancelDeviceConnection() {
         selectedDeviceConnectionThread?.cancelConnection()
     }
+
+    @SuppressLint("MissingPermission")
+    fun cancelDeviceDiscovery() {
+        if (bluetoothState == BluetoothState.DISCOVERING) {
+            bluetoothAdapter?.cancelDiscovery()
+        }
+    }
+
+    fun onDeviceDiscovered(device: BluetoothDevice) {
+        discoveredDevices.add(device)
+        updateViewState()
+    }
+
+    fun onDeviceDiscoveryFinished() {
+        bluetoothState = BluetoothState.DEFAULT
+        //TODO update state depending on devices discovered
+        updateViewState()
+    }
+
+    fun checkBluetoothAdapterState() {
+        if (bluetoothAdapter?.state == BluetoothAdapter.STATE_OFF) {
+            bluetoothState = BluetoothState.DISABLED
+            updateViewState()
+        }
+    }
+
 }

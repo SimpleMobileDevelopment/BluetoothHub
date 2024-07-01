@@ -1,39 +1,24 @@
 package com.simple.bluetoothhub
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
-
-    private var isScanning by mutableStateOf(false)
 
     private val mainViewModel: MainViewModel by viewModels()
 
@@ -50,87 +35,99 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val enableBluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            mainViewModel.onBluetoothDisabled()
+        } else {
+            mainViewModel.onBluetoothEnabled()
+        }
+    }
+
+    private val bluetoothDeviceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device =
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    if (ActivityCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.BLUETOOTH_CONNECT
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        if (device != null && device.name != null) {
+                            mainViewModel.onDeviceDiscovered(device)
+                        }
+                    } else {
+                        mainViewModel.onPermissionRequired()
+                    }
+                }
+
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    mainViewModel.onDeviceDiscoveryFinished()
+                }
+
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    mainViewModel.checkBluetoothAdapterState()
+                }
+            }
+        }
+    }
+
+    private fun enableBluetooth() {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                requestPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        } else {
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBluetoothLauncher.launch(intent)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Register for broadcasts when a device is discovered
+        val filter = IntentFilter().apply {
+            //register a broadcast receiver to check if the user disables his Bluetooth (or it has it already disabled)
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            //receivers for device discovering
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        registerReceiver(bluetoothDeviceReceiver, filter)
 
         setContent {
             val viewState by mainViewModel.viewState.collectAsStateWithLifecycle()
 
             MainScreen(
                 viewState = viewState,
-                isScanning = isScanning,
                 onStartScan = {
                     requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                 },
                 onStopScan = { mainViewModel.cancelDeviceConnection() },
-                onDeviceSelected = { mainViewModel.onDeviceSelected(it) }
+                onDeviceSelected = { mainViewModel.onDeviceSelected(it) },
+                onPermissionRequired = { mainViewModel.onPermissionRequired() },
+                onRequestPermission = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        requestPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                    }
+                },
+                onBluetoothDisabled = { enableBluetooth() }
             )
         }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun MainScreen(
-        viewState: MainUiState,
-        isScanning: Boolean,
-        onStartScan: () -> Unit,
-        onStopScan: () -> Unit,
-        onDeviceSelected: (BluetoothDevice) -> Unit
-    ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(title = { Text("Bluetooth App") })
-            }
-        ) { padding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                if (isScanning) {
-                    CircularProgressIndicator()
-                } else {
-                    Button(onClick = onStartScan) {
-                        Text("Start Scan")
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (viewState is MainUiState.Loaded) {
-                    DiscoveredDevices(viewState = viewState) {
-                        mainViewModel.onDeviceSelected(it)
-                    }
-                }
-
-                if (isScanning) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = onStopScan) {
-                        Text("Stop Scan")
-                    }
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun DiscoveredDevices(viewState: MainUiState.Loaded, onDeviceSelected: (BluetoothDevice) -> Unit) {
-        val context = LocalContext.current
-
-        viewState.discoveredDevices.forEach { device ->
-            Button(onClick = { onDeviceSelected(device) }) {
-                if (ActivityCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    mainViewModel.onPermissionRequired()
-                } else {
-                    Text(device.name ?: "Unknown Device")
-                }
-            }
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        mainViewModel.cancelDeviceDiscovery()
+        mainViewModel.cancelDeviceConnection()
+        this.unregisterReceiver(bluetoothDeviceReceiver)
     }
 }

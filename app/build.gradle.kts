@@ -53,6 +53,7 @@ android {
 dependencies {
     // Dagger-Hilt
     implementation("com.google.dagger:hilt-android:2.48")
+    implementation(libs.androidx.bluetooth)
     ksp(libs.dagger.hilt.android.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
 
