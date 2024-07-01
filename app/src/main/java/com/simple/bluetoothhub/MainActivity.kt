@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
@@ -22,15 +23,12 @@ class MainActivity : ComponentActivity() {
 
     private val mainViewModel: MainViewModel by viewModels()
 
-    // Launcher for requesting location permission (needed for Bluetooth scanning)
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            // Permission granted, proceed with Bluetooth operations
             mainViewModel.onPermissionGranted()
         } else {
-            // Handle case where permission is denied
             mainViewModel.onPermissionDenied()
         }
     }
@@ -95,9 +93,7 @@ class MainActivity : ComponentActivity() {
 
         // Register for broadcasts when a device is discovered
         val filter = IntentFilter().apply {
-            //register a broadcast receiver to check if the user disables his Bluetooth (or it has it already disabled)
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
-            //receivers for device discovering
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
         }
@@ -109,7 +105,11 @@ class MainActivity : ComponentActivity() {
             MainScreen(
                 viewState = viewState,
                 onStartScan = {
-                    requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                    requestPermissions(
+                        multiplePermissionLauncher,
+                        requiredPermissionsInitialClient,
+                        this
+                    ) { mainViewModel.startDeviceDiscovery() }
                 },
                 onStopScan = { mainViewModel.cancelDeviceConnection() },
                 onDeviceSelected = { mainViewModel.onDeviceSelected(it) },
@@ -130,4 +130,33 @@ class MainActivity : ComponentActivity() {
         mainViewModel.cancelDeviceConnection()
         this.unregisterReceiver(bluetoothDeviceReceiver)
     }
+
+    private fun requestPermissions(
+        multiplePermissionLauncher: ActivityResultLauncher<Array<String>>,
+        requiredPermissions: Array<String>,
+        context: Context,
+        actionIfAlreadyGranted: () -> Unit
+    ) {
+        if (!hasPermissions(requiredPermissions, context)) {
+            multiplePermissionLauncher.launch(requiredPermissions)
+        } else {
+            actionIfAlreadyGranted()
+        }
+    }
+
+    private fun hasPermissions(permissions: Array<String>?, context: Context): Boolean {
+        return permissions?.all {
+            ActivityCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        } ?: false
+    }
+
+    private val multiplePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            if (permissions.containsValue(false)) {
+                mainViewModel.onPermissionDenied()
+            } else {
+                mainViewModel.startDeviceDiscovery()
+            }
+        }
+
 }
